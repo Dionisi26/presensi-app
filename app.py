@@ -22,16 +22,18 @@ except:
     st.error("File mahasiswa.xlsx tidak ditemukan / rusak")
     st.stop()
 
+# INIT CSV
 if not os.path.exists(DATA_PATH):
     pd.DataFrame(columns=[
-        "nama", "nim", "mata_kuliah", "tanggal",
-        "jenis_kendala", "deskripsi", "bukti", "status"
+        "nama","nim","mata_kuliah","kelas","pertemuan_ke",
+        "tanggal_pertemuan","tanggal_laporan",
+        "jenis_kendala","deskripsi","bukti","status"
     ]).to_csv(DATA_PATH, index=False)
 
 df = pd.read_csv(DATA_PATH)
 
-# 🔥 FIX: convert tanggal (penting untuk grafik)
-df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
+# FIX DATE
+df["tanggal_pertemuan"] = pd.to_datetime(df.get("tanggal_pertemuan"), errors="coerce")
 
 # ================= LOGIN =================
 if not st.session_state.logged_in:
@@ -83,19 +85,21 @@ if role == "mahasiswa":
 
         with st.form("form"):
             matkul = st.selectbox("Mata Kuliah", data_mhs["mata_kuliah"].unique())
-            tanggal = st.date_input("Tanggal")
+
+            kelas = st.selectbox("Kelas", data_mhs["kelas"].unique())
+
+            pertemuan = st.number_input("Pertemuan Ke-", 1, 16)
+
+            tanggal_pertemuan = st.date_input("Tanggal Pertemuan")
 
             jenis = st.selectbox("Jenis Kendala", [
-                "Gagal Scan", "Sistem Error", "Lupa Presensi",
-                "Lokasi Tidak Terdeteksi", "Lainnya"
+                "Gagal Scan","Sistem Error","Lupa Presensi",
+                "Lokasi Tidak Terdeteksi","Lainnya"
             ])
 
             deskripsi = st.text_area("Deskripsi Kendala")
 
-            bukti = st.file_uploader(
-                "Upload Bukti",
-                type=["png", "jpg", "jpeg", "pdf"]
-            )
+            bukti = st.file_uploader("Upload Bukti", type=["png","jpg","jpeg","pdf"])
 
             submit = st.form_submit_button("Kirim")
 
@@ -103,8 +107,18 @@ if role == "mahasiswa":
                 if deskripsi.strip() == "":
                     st.warning("Deskripsi tidak boleh kosong")
                 else:
-                    filename = ""
+                    # VALIDASI DUPLIKASI
+                    cek = df[
+                        (df["nim"].astype(str) == str(nim)) &
+                        (df["mata_kuliah"] == matkul) &
+                        (df["pertemuan_ke"] == pertemuan)
+                    ]
 
+                    if not cek.empty:
+                        st.error("❌ Sudah pernah submit di pertemuan ini")
+                        st.stop()
+
+                    filename = ""
                     if bukti:
                         filename = f"{datetime.now().timestamp()}_{bukti.name}"
                         with open(os.path.join(UPLOAD_PATH, filename), "wb") as f:
@@ -114,7 +128,10 @@ if role == "mahasiswa":
                         "nama": nama,
                         "nim": nim,
                         "mata_kuliah": matkul,
-                        "tanggal": tanggal,
+                        "kelas": kelas,
+                        "pertemuan_ke": pertemuan,
+                        "tanggal_pertemuan": tanggal_pertemuan,
+                        "tanggal_laporan": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "jenis_kendala": jenis,
                         "deskripsi": deskripsi,
                         "bukti": filename,
@@ -129,7 +146,7 @@ if role == "mahasiswa":
 
         # RIWAYAT
         st.subheader("📄 Riwayat Laporan")
-        st.dataframe(df[df["nim"] == str(nim)])
+        st.dataframe(df[df["nim"].astype(str) == str(nim)])
 
 # ================= ADMIN =================
 elif role == "admin":
@@ -138,16 +155,18 @@ elif role == "admin":
     if df.empty:
         st.warning("Belum ada laporan")
     else:
-        # SEARCH
-        search = st.text_input("🔍 Cari Nama / NIM")
+        # FILTER
+        colf1, colf2 = st.columns(2)
+        kelas_filter = colf1.selectbox("Filter Kelas", ["Semua"] + list(df["kelas"].dropna().unique()))
+        matkul_filter = colf2.selectbox("Filter Matkul", ["Semua"] + list(df["mata_kuliah"].dropna().unique()))
 
         df_view = df.copy()
 
-        if search:
-            df_view = df_view[
-                df_view["nama"].str.contains(search, case=False, na=False) |
-                df_view["nim"].astype(str).str.contains(search)
-            ]
+        if kelas_filter != "Semua":
+            df_view = df_view[df_view["kelas"] == kelas_filter]
+
+        if matkul_filter != "Semua":
+            df_view = df_view[df_view["mata_kuliah"] == matkul_filter]
 
         # KPI
         col1, col2, col3 = st.columns(3)
@@ -156,12 +175,10 @@ elif role == "admin":
         col3.metric("Ditolak", len(df_view[df_view["status"] == "Ditolak"]))
 
         # ================= INSIGHT =================
-
-        st.subheader("📈 Tren Kendala Mingguan")
+        st.subheader("📈 Tren Mingguan")
         df_week = df.copy()
-        df_week["minggu"] = df_week["tanggal"].dt.to_period("W").astype(str)
-        weekly = df_week.groupby("minggu").size()
-        st.line_chart(weekly)
+        df_week["minggu"] = df_week["tanggal_pertemuan"].dt.to_period("W").astype(str)
+        st.line_chart(df_week.groupby("minggu").size())
 
         st.subheader("📊 Performa Presensi")
         total = len(df)
@@ -179,25 +196,26 @@ elif role == "admin":
                 col1, col2 = st.columns([3,1])
 
                 with col1:
-                    st.subheader(f"{row['nama']} ({row['nim']})")
-                    st.write(f"📚 {row['mata_kuliah']}")
-                    st.write(f"⚠️ {row['jenis_kendala']}")
-                    st.write(f"📝 {row['deskripsi']}")
+                    st.subheader(f"{row.get('nama')} ({row.get('nim')})")
+                    st.write(f"📚 {row.get('mata_kuliah')}")
+                    st.write(f"🏫 Kelas: {row.get('kelas')}")
+                    st.write(f"📘 Pertemuan: {row.get('pertemuan_ke')}")
+                    st.write(f"📅 {row.get('tanggal_pertemuan')}")
+                    st.write(f"⚠️ {row.get('jenis_kendala')}")
+                    st.write(f"📝 {row.get('deskripsi')}")
+                    st.write(f"⏱️ {row.get('tanggal_laporan')}")
 
-                    # 🔥 FIX BUKTI (ANTI ERROR)
-                    bukti_file = str(row["bukti"])
-
+                    bukti_file = str(row.get("bukti"))
                     if bukti_file != "nan" and bukti_file != "":
                         file_path = os.path.join(UPLOAD_PATH, bukti_file)
-
                         if os.path.exists(file_path):
-                            if file_path.endswith(("png", "jpg", "jpeg")):
+                            if file_path.endswith(("png","jpg","jpeg")):
                                 st.image(file_path, width=200)
                             else:
                                 st.write(f"📎 {bukti_file}")
 
                 with col2:
-                    st.write(f"Status: **{row['status']}**")
+                    st.write(f"Status: **{row.get('status')}**")
 
                     if st.button("✅ Approve", key=f"a{i}"):
                         df.loc[i, "status"] = "Disetujui"
