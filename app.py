@@ -244,11 +244,11 @@ elif role == "admin":
 
             if st.button("Reject", key=f"r{row['id']}"):
                 try:
-                supabase.table("laporan") \
-                    .update({"status": "Ditolak"}) \
-                    .eq("id", row["id"]) \
-                    .execute()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Update Error: {e}")
+                    supabase.table("laporan") \
+                        .update({"status": "Ditolak"}) \
+                        .eq("id", row["id"]) \
+                        .execute()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Update Error: {e}")
                 st.rerun()
