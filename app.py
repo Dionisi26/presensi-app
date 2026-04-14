@@ -5,23 +5,23 @@ from datetime import datetime
 from supabase import create_client
 import smtplib
 from email.message import EmailMessage
-os.makedirs("uploads", exist_ok=True)
-# ================= INIT =================
-from session import init_session
-init_session()
 
+# ================= INIT =================
 st.set_page_config(page_title="Sistem Presensi", layout="wide")
 
+# ================= FOLDER =================
+os.makedirs("uploads", exist_ok=True)
+
 # ================= SUPABASE =================
-SUPABASE_URL = "https://fftmsmfjtxhcoeshdcaw.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+SUPABASE_URL = os.getenv("https://fftmsmfjtxhcoeshdcaw.supabase.co")
+SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmdG1zbWZqdHhoY29lc2hkY2F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNDYwNjQsImV4cCI6MjA5MTcyMjA2NH0.zYWO75eY6X35LjUz0jTnepX29oo9eDiJSmiKRazKF-c")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ================= EMAIL CONFIG =================
-EMAIL_SENDER = "EMAIL_KAMU@gmail.com"
-EMAIL_PASS = "APP_PASSWORD"
-EMAIL_ADMIN = "EMAIL_ADMIN@gmail.com"
+# ================= EMAIL =================
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+EMAIL_ADMIN = os.getenv("EMAIL_ADMIN")
 
 def kirim_email(nama, nim, matkul):
     try:
@@ -41,21 +41,8 @@ Matkul: {matkul}
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(EMAIL_SENDER, EMAIL_PASS)
             smtp.send_message(msg)
-    except:
-        pass
-
-# ================= UI STYLE =================
-st.markdown("""
-<style>
-.main {background-color: #0e1117;}
-h1, h2, h3 {color: #ffffff;}
-div[data-testid="stMetric"] {
-    background: #1c1f26;
-    padding: 15px;
-    border-radius: 10px;
-}
-</style>
-""", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Email gagal dikirim: {e}")
 
 # ================= LOAD MAHASISWA =================
 try:
@@ -65,12 +52,11 @@ except:
     st.error("File mahasiswa.xlsx error")
     st.stop()
 
-# ================= LOAD DATA SUPABASE =================
+# ================= LOAD DATA =================
 def load_data():
     try:
         res = supabase.table("laporan").select("*").execute()
 
-        # DEBUG RESPONSE
         if hasattr(res, "error") and res.error:
             st.error(f"Supabase Error: {res.error}")
             return pd.DataFrame()
@@ -88,8 +74,14 @@ def load_data():
         return df
 
     except Exception as e:
-        st.error(f"ERROR DETAIL: {e}")
+        st.error(f"Load Error: {e}")
         return pd.DataFrame()
+
+df = load_data()
+
+# ================= SESSION =================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
 # ================= LOGIN =================
 if not st.session_state.logged_in:
@@ -155,12 +147,11 @@ if role == "mahasiswa":
                 if deskripsi.strip() == "":
                     st.warning("Deskripsi wajib diisi")
                 else:
-                    # VALIDASI DUPLIKASI
                     cek = df[
                         (df["nim"] == nim) &
                         (df["mata_kuliah"] == matkul) &
                         (df["pertemuan_ke"] == pertemuan)
-                    ]
+                    ] if not df.empty else pd.DataFrame()
 
                     if not cek.empty:
                         st.error("Sudah pernah submit")
@@ -187,33 +178,30 @@ if role == "mahasiswa":
                     }
 
                     try:
-                        insert_res = supabase.table("laporan").insert(new_data).execute()
-                
-                        if hasattr(insert_res, "error") and insert_res.error:
-                            st.error(f"Gagal insert: {insert_res.error}")
+                        res = supabase.table("laporan").insert(new_data).execute()
+
+                        if hasattr(res, "error") and res.error:
+                            st.error(f"Gagal insert: {res.error}")
                         else:
                             kirim_email(nama, nim, matkul)
                             st.success("Laporan terkirim!")
                             st.rerun()
-                
+
                     except Exception as e:
                         st.error(f"Insert Error: {e}")
-
-                    st.success("Laporan terkirim!")
-                    st.rerun()
 
 # ================= ADMIN =================
 elif role == "admin":
     st.title("🎓 Dashboard Akademik")
 
-    if not df.empty:
-        # KPI
+    if df.empty:
+        st.warning("Belum ada data")
+    else:
         col1, col2, col3 = st.columns(3)
         col1.metric("Total", len(df))
         col2.metric("Disetujui", len(df[df["status"] == "Disetujui"]))
         col3.metric("Ditolak", len(df[df["status"] == "Ditolak"]))
 
-        # BULANAN
         st.subheader("📊 Tren Bulanan")
         df["bulan"] = df["tanggal_pertemuan"].dt.to_period("M").astype(str)
         st.line_chart(df.groupby("bulan").size())
@@ -224,7 +212,6 @@ elif role == "admin":
         st.subheader("⚠️ Jenis Kendala")
         st.bar_chart(df["jenis_kendala"].value_counts())
 
-        # DATA
         for _, row in df.iterrows():
             st.markdown("---")
             st.write(f"{row['nama']} ({row['nim']})")
@@ -240,7 +227,6 @@ elif role == "admin":
                     st.rerun()
                 except Exception as e:
                     st.error(f"Update Error: {e}")
-                st.rerun()
 
             if st.button("Reject", key=f"r{row['id']}"):
                 try:
@@ -251,4 +237,3 @@ elif role == "admin":
                     st.rerun()
                 except Exception as e:
                     st.error(f"Update Error: {e}")
-                st.rerun()
