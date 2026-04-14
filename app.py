@@ -187,17 +187,17 @@ if role == "mahasiswa":
                     }
 
                     try:
-                    insert_res = supabase.table("laporan").insert(new_data).execute()
-
-                    if hasattr(insert_res, "error") and insert_res.error:
-                        st.error(f"Gagal insert: {insert_res.error}")
-                    else:
-                        kirim_email(nama, nim, matkul)
-                        st.success("Laporan terkirim!")
-                        st.rerun()
+                        insert_res = supabase.table("laporan").insert(new_data).execute()
                 
-                except Exception as e:
-                    st.error(f"Insert Error: {e}")
+                        if hasattr(insert_res, "error") and insert_res.error:
+                            st.error(f"Gagal insert: {insert_res.error}")
+                        else:
+                            kirim_email(nama, nim, matkul)
+                            st.success("Laporan terkirim!")
+                            st.rerun()
+                
+                    except Exception as e:
+                        st.error(f"Insert Error: {e}")
 
                     st.success("Laporan terkirim!")
                     st.rerun()
