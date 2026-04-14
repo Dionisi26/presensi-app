@@ -5,7 +5,7 @@ from datetime import datetime
 from supabase import create_client
 import smtplib
 from email.message import EmailMessage
-
+os.makedirs("uploads", exist_ok=True)
 # ================= INIT =================
 from session import init_session
 init_session()
@@ -67,13 +67,29 @@ except:
 
 # ================= LOAD DATA SUPABASE =================
 def load_data():
-    res = supabase.table("laporan").select("*").execute()
-    df = pd.DataFrame(res.data)
-    if not df.empty:
-        df["tanggal_pertemuan"] = pd.to_datetime(df["tanggal_pertemuan"], errors="coerce")
-    return df
+    try:
+        res = supabase.table("laporan").select("*").execute()
 
-df = load_data()
+        # DEBUG RESPONSE
+        if hasattr(res, "error") and res.error:
+            st.error(f"Supabase Error: {res.error}")
+            return pd.DataFrame()
+
+        if not res.data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(res.data)
+
+        if "tanggal_pertemuan" in df.columns:
+            df["tanggal_pertemuan"] = pd.to_datetime(
+                df["tanggal_pertemuan"], errors="coerce"
+            )
+
+        return df
+
+    except Exception as e:
+        st.error(f"ERROR DETAIL: {e}")
+        return pd.DataFrame()
 
 # ================= LOGIN =================
 if not st.session_state.logged_in:
@@ -170,8 +186,18 @@ if role == "mahasiswa":
                         "status": "Menunggu"
                     }
 
-                    supabase.table("laporan").insert(new_data).execute()
-                    kirim_email(nama, nim, matkul)
+                    try:
+                    insert_res = supabase.table("laporan").insert(new_data).execute()
+
+                    if hasattr(insert_res, "error") and insert_res.error:
+                        st.error(f"Gagal insert: {insert_res.error}")
+                    else:
+                        kirim_email(nama, nim, matkul)
+                        st.success("Laporan terkirim!")
+                        st.rerun()
+                
+                except Exception as e:
+                    st.error(f"Insert Error: {e}")
 
                     st.success("Laporan terkirim!")
                     st.rerun()
@@ -206,9 +232,23 @@ elif role == "admin":
             st.write(f"Pertemuan {row['pertemuan_ke']}")
 
             if st.button("Approve", key=f"a{row['id']}"):
-                supabase.table("laporan").update({"status": "Disetujui"}).eq("id", row["id"]).execute()
+                try:
+                    supabase.table("laporan") \
+                        .update({"status": "Disetujui"}) \
+                        .eq("id", row["id"]) \
+                        .execute()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Update Error: {e}")
                 st.rerun()
 
             if st.button("Reject", key=f"r{row['id']}"):
-                supabase.table("laporan").update({"status": "Ditolak"}).eq("id", row["id"]).execute()
+                try:
+                supabase.table("laporan") \
+                    .update({"status": "Ditolak"}) \
+                    .eq("id", row["id"]) \
+                    .execute()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Update Error: {e}")
                 st.rerun()
