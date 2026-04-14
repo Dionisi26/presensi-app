@@ -2,56 +2,78 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
+from supabase import create_client
+import smtplib
+from email.message import EmailMessage
 
+# ================= INIT =================
 from session import init_session
 init_session()
 
 st.set_page_config(page_title="Sistem Presensi", layout="wide")
+
+# ================= SUPABASE =================
+SUPABASE_URL = "https://fftmsmfjtxhcoeshdcaw.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ================= EMAIL CONFIG =================
+EMAIL_SENDER = "EMAIL_KAMU@gmail.com"
+EMAIL_PASS = "APP_PASSWORD"
+EMAIL_ADMIN = "EMAIL_ADMIN@gmail.com"
+
+def kirim_email(nama, nim, matkul):
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = 'Laporan Presensi Baru'
+        msg['From'] = EMAIL_SENDER
+        msg['To'] = EMAIL_ADMIN
+
+        msg.set_content(f"""
+Laporan baru masuk:
+
+Nama: {nama}
+NIM: {nim}
+Matkul: {matkul}
+""")
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_SENDER, EMAIL_PASS)
+            smtp.send_message(msg)
+    except:
+        pass
 
 # ================= UI STYLE =================
 st.markdown("""
 <style>
 .main {background-color: #0e1117;}
 h1, h2, h3 {color: #ffffff;}
-.block-container {padding-top: 2rem;}
-
 div[data-testid="stMetric"] {
     background: #1c1f26;
     padding: 15px;
     border-radius: 10px;
-    text-align: center;
-}
-
-.stButton>button {
-    border-radius: 8px;
-    background: #4CAF50;
-    color: white;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ================= PATH =================
-DATA_PATH = "data/laporan.csv"
-UPLOAD_PATH = "uploads"
-os.makedirs(UPLOAD_PATH, exist_ok=True)
-
-# ================= LOAD DATA =================
+# ================= LOAD MAHASISWA =================
 try:
     df_mhs = pd.read_excel("data/mahasiswa.xlsx")
     df_mhs.columns = ["kode_mk", "mata_kuliah", "kelas", "nim", "nama"]
 except:
-    st.error("File mahasiswa.xlsx tidak ditemukan / rusak")
+    st.error("File mahasiswa.xlsx error")
     st.stop()
 
-if not os.path.exists(DATA_PATH):
-    pd.DataFrame(columns=[
-        "nama","nim","mata_kuliah","kelas","pertemuan_ke",
-        "tanggal_pertemuan","tanggal_laporan",
-        "jenis_kendala","deskripsi","bukti","status"
-    ]).to_csv(DATA_PATH, index=False)
+# ================= LOAD DATA SUPABASE =================
+def load_data():
+    res = supabase.table("laporan").select("*").execute()
+    df = pd.DataFrame(res.data)
+    if not df.empty:
+        df["tanggal_pertemuan"] = pd.to_datetime(df["tanggal_pertemuan"], errors="coerce")
+    return df
 
-df = pd.read_csv(DATA_PATH)
-df["tanggal_pertemuan"] = pd.to_datetime(df.get("tanggal_pertemuan"), errors="coerce")
+df = load_data()
 
 # ================= LOGIN =================
 if not st.session_state.logged_in:
@@ -79,7 +101,7 @@ if not st.session_state.logged_in:
 
 # ================= SIDEBAR =================
 st.sidebar.title("🎓 Sistem Akademik")
-st.sidebar.write(f"Login sebagai: {st.session_state.username}")
+st.sidebar.write(f"Login: {st.session_state.username}")
 
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
@@ -96,7 +118,6 @@ if role == "mahasiswa":
 
     if not data_mhs.empty:
         nama = data_mhs.iloc[0]["nama"]
-        st.success(f"Login sebagai: {nama}")
 
         with st.form("form"):
             matkul = st.selectbox("Mata Kuliah", data_mhs["mata_kuliah"].unique())
@@ -109,29 +130,30 @@ if role == "mahasiswa":
                 "Lokasi Tidak Terdeteksi","Lainnya"
             ])
 
-            deskripsi = st.text_area("Deskripsi Kendala")
+            deskripsi = st.text_area("Deskripsi")
             bukti = st.file_uploader("Upload Bukti", type=["png","jpg","jpeg","pdf"])
 
             submit = st.form_submit_button("Kirim")
 
             if submit:
                 if deskripsi.strip() == "":
-                    st.warning("Deskripsi tidak boleh kosong")
+                    st.warning("Deskripsi wajib diisi")
                 else:
+                    # VALIDASI DUPLIKASI
                     cek = df[
-                        (df["nim"].astype(str) == str(nim)) &
+                        (df["nim"] == nim) &
                         (df["mata_kuliah"] == matkul) &
                         (df["pertemuan_ke"] == pertemuan)
                     ]
 
                     if not cek.empty:
-                        st.error("❌ Sudah pernah submit di pertemuan ini")
+                        st.error("Sudah pernah submit")
                         st.stop()
 
                     filename = ""
                     if bukti:
                         filename = f"{datetime.now().timestamp()}_{bukti.name}"
-                        with open(os.path.join(UPLOAD_PATH, filename), "wb") as f:
+                        with open(os.path.join("uploads", filename), "wb") as f:
                             f.write(bukti.getbuffer())
 
                     new_data = {
@@ -140,84 +162,53 @@ if role == "mahasiswa":
                         "mata_kuliah": matkul,
                         "kelas": kelas,
                         "pertemuan_ke": pertemuan,
-                        "tanggal_pertemuan": tanggal_pertemuan,
-                        "tanggal_laporan": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "tanggal_pertemuan": str(tanggal_pertemuan),
+                        "tanggal_laporan": datetime.now().isoformat(),
                         "jenis_kendala": jenis,
                         "deskripsi": deskripsi,
                         "bukti": filename,
                         "status": "Menunggu"
                     }
 
-                    df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-                    df.to_csv(DATA_PATH, index=False)
+                    supabase.table("laporan").insert(new_data).execute()
+                    kirim_email(nama, nim, matkul)
 
-                    st.success("✅ Laporan berhasil dikirim!")
+                    st.success("Laporan terkirim!")
                     st.rerun()
 
 # ================= ADMIN =================
 elif role == "admin":
     st.title("🎓 Dashboard Akademik")
-    st.caption("Monitoring Kendala Presensi Mahasiswa")
 
     if not df.empty:
-
         # KPI
         col1, col2, col3 = st.columns(3)
         col1.metric("Total", len(df))
         col2.metric("Disetujui", len(df[df["status"] == "Disetujui"]))
         col3.metric("Ditolak", len(df[df["status"] == "Ditolak"]))
 
-        # ================= INSIGHT BULANAN =================
-        st.subheader("📊 Tren Kendala Bulanan")
-        df_month = df.copy()
-        df_month["bulan"] = df_month["tanggal_pertemuan"].dt.to_period("M").astype(str)
-        st.line_chart(df_month.groupby("bulan").size())
+        # BULANAN
+        st.subheader("📊 Tren Bulanan")
+        df["bulan"] = df["tanggal_pertemuan"].dt.to_period("M").astype(str)
+        st.line_chart(df.groupby("bulan").size())
 
-        st.subheader("🏫 Kelas Paling Bermasalah")
+        st.subheader("🏫 Kelas Bermasalah")
         st.bar_chart(df["kelas"].value_counts())
 
-        st.subheader("⚠️ Jenis Kendala Terbanyak")
+        st.subheader("⚠️ Jenis Kendala")
         st.bar_chart(df["jenis_kendala"].value_counts())
 
-        # ================= PDF EXPORT =================
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-        from reportlab.lib import colors
+        # DATA
+        for _, row in df.iterrows():
+            st.markdown("---")
+            st.write(f"{row['nama']} ({row['nim']})")
+            st.write(f"{row['mata_kuliah']} | {row['kelas']}")
+            st.write(f"Pertemuan {row['pertemuan_ke']}")
 
-        def generate_pdf(dataframe):
-            file_path = "laporan.pdf"
-            doc = SimpleDocTemplate(file_path)
+            if st.button("Approve", key=f"a{row['id']}"):
+                supabase.table("laporan").update({"status": "Disetujui"}).eq("id", row["id"]).execute()
+                st.rerun()
 
-            data = [dataframe.columns.tolist()] + dataframe.values.tolist()
-
-            table = Table(data)
-            table.setStyle(TableStyle([
-                ('BACKGROUND',(0,0),(-1,0),colors.grey),
-                ('GRID',(0,0),(-1,-1),1,colors.black)
-            ]))
-
-            doc.build([table])
-            return file_path
-
-        if st.button("📄 Export PDF"):
-            pdf = generate_pdf(df)
-            with open(pdf, "rb") as f:
-                st.download_button("Download PDF", f, "laporan.pdf")
-
-        # ================= DATA =================
-        for i, row in df.iterrows():
-            with st.container():
-                st.markdown("---")
-                st.write(f"👤 {row['nama']} ({row['nim']})")
-                st.write(f"📚 {row['mata_kuliah']} | {row['kelas']}")
-                st.write(f"📘 Pertemuan {row['pertemuan_ke']}")
-                st.write(f"⚠️ {row['jenis_kendala']}")
-
-                if st.button("Approve", key=f"a{i}"):
-                    df.loc[i, "status"] = "Disetujui"
-                    df.to_csv(DATA_PATH, index=False)
-                    st.rerun()
-
-                if st.button("Reject", key=f"r{i}"):
-                    df.loc[i, "status"] = "Ditolak"
-                    df.to_csv(DATA_PATH, index=False)
-                    st.rerun()
+            if st.button("Reject", key=f"r{row['id']}"):
+                supabase.table("laporan").update({"status": "Ditolak"}).eq("id", row["id"]).execute()
+                st.rerun()
