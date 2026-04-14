@@ -9,13 +9,9 @@ from email.message import EmailMessage
 # ================= INIT =================
 st.set_page_config(page_title="Sistem Presensi", layout="wide")
 
-# ================= FOLDER =================
-os.makedirs("uploads", exist_ok=True)
-
 # ================= SUPABASE =================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ================= EMAIL =================
@@ -26,7 +22,7 @@ EMAIL_ADMIN = os.getenv("EMAIL_ADMIN")
 def kirim_email(nama, nim, matkul):
     try:
         msg = EmailMessage()
-        msg['Subject'] = 'Laporan Presensi Baru'
+        msg['Subject'] = '📩 Laporan Presensi Baru'
         msg['From'] = EMAIL_SENDER
         msg['To'] = EMAIL_ADMIN
 
@@ -42,42 +38,19 @@ Matkul: {matkul}
             smtp.login(EMAIL_SENDER, EMAIL_PASS)
             smtp.send_message(msg)
     except Exception as e:
-        st.warning(f"Email gagal dikirim: {e}")
+        st.warning(f"Email gagal: {e}")
 
 # ================= LOAD MAHASISWA =================
-try:
-    df_mhs = pd.read_excel("data/mahasiswa.xlsx")
-    df_mhs.columns = ["kode_mk", "mata_kuliah", "kelas", "nim", "nama"]
-except:
-    st.error("File mahasiswa.xlsx error")
-    st.stop()
+df_mhs = pd.read_excel("data/mahasiswa.xlsx")
+df_mhs.columns = ["kode_mk", "mata_kuliah", "kelas", "nim", "nama"]
 
 # ================= LOAD DATA =================
 def load_data():
     try:
         res = supabase.table("laporan").select("*").execute()
-
-        if hasattr(res, "error") and res.error:
-            st.error(f"Supabase Error: {res.error}")
-            return pd.DataFrame()
-
-        if not res.data:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(res.data)
-
-        if "tanggal_pertemuan" in df.columns:
-            df["tanggal_pertemuan"] = pd.to_datetime(
-                df["tanggal_pertemuan"], errors="coerce"
-            )
-
-        return df
-
-    except Exception as e:
-        st.error(f"Load Error: {e}")
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except:
         return pd.DataFrame()
-
-df = load_data()
 
 # ================= SESSION =================
 if "logged_in" not in st.session_state:
@@ -87,7 +60,7 @@ if "logged_in" not in st.session_state:
 if not st.session_state.logged_in:
     st.title("🔐 Login Sistem Presensi")
 
-    username = st.text_input("Username (Admin / NIM)")
+    username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
@@ -108,9 +81,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ================= SIDEBAR =================
-st.sidebar.title("🎓 Sistem Akademik")
 st.sidebar.write(f"Login: {st.session_state.username}")
-
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.rerun()
@@ -119,121 +90,94 @@ role = st.session_state.role
 
 # ================= MAHASISWA =================
 if role == "mahasiswa":
-    st.title("📩 Lapor Kendala Presensi")
+    df = load_data()
+
+    st.title("📩 Lapor Kendala")
 
     nim = st.session_state.username
     data_mhs = df_mhs[df_mhs["nim"].astype(str) == str(nim)]
+    nama = data_mhs.iloc[0]["nama"]
 
-    if not data_mhs.empty:
-        nama = data_mhs.iloc[0]["nama"]
+    with st.form("form"):
+        matkul = st.selectbox("Mata Kuliah", data_mhs["mata_kuliah"].unique())
+        kelas = st.selectbox("Kelas", data_mhs["kelas"].unique())
+        pertemuan = st.number_input("Pertemuan Ke-", 1, 16)
+        tanggal = st.date_input("Tanggal")
 
-        with st.form("form"):
-            matkul = st.selectbox("Mata Kuliah", data_mhs["mata_kuliah"].unique())
-            kelas = st.selectbox("Kelas", data_mhs["kelas"].unique())
-            pertemuan = st.number_input("Pertemuan Ke-", 1, 16)
-            tanggal_pertemuan = st.date_input("Tanggal Pertemuan")
+        jenis = st.selectbox("Jenis Kendala", ["Gagal Scan","Sistem Error","Lupa Presensi","Lainnya"])
+        deskripsi = st.text_area("Deskripsi")
+        bukti = st.file_uploader("Upload Bukti")
 
-            jenis = st.selectbox("Jenis Kendala", [
-                "Gagal Scan","Sistem Error","Lupa Presensi",
-                "Lokasi Tidak Terdeteksi","Lainnya"
-            ])
+        submit = st.form_submit_button("Kirim")
 
-            deskripsi = st.text_area("Deskripsi")
-            bukti = st.file_uploader("Upload Bukti", type=["png","jpg","jpeg","pdf"])
+        if submit:
+            if deskripsi.strip() == "":
+                st.warning("Isi deskripsi")
+            else:
+                # upload ke storage
+                file_url = ""
+                if bukti:
+                    filename = f"{datetime.now().timestamp()}_{bukti.name}"
+                    supabase.storage.from_("bukti").upload(filename, bukti.getvalue())
+                    file_url = f"{SUPABASE_URL}/storage/v1/object/public/bukti/{filename}"
 
-            submit = st.form_submit_button("Kirim")
+                data = {
+                    "nama": nama,
+                    "nim": nim,
+                    "mata_kuliah": matkul,
+                    "kelas": kelas,
+                    "pertemuan_ke": pertemuan,
+                    "tanggal_pertemuan": str(tanggal),
+                    "tanggal_laporan": datetime.now().isoformat(),
+                    "jenis_kendala": jenis,
+                    "deskripsi": deskripsi,
+                    "bukti": file_url,
+                    "status": "Menunggu"
+                }
 
-            if submit:
-                if deskripsi.strip() == "":
-                    st.warning("Deskripsi wajib diisi")
-                else:
-                    cek = df[
-                        (df["nim"] == nim) &
-                        (df["mata_kuliah"] == matkul) &
-                        (df["pertemuan_ke"] == pertemuan)
-                    ] if not df.empty else pd.DataFrame()
+                supabase.table("laporan").insert(data).execute()
+                kirim_email(nama, nim, matkul)
+                st.success("Terkirim!")
+                st.rerun()
 
-                    if not cek.empty:
-                        st.error("Sudah pernah submit")
-                        st.stop()
+    # RIWAYAT
+    st.subheader("📋 Riwayat")
+    df_user = df[df["nim"] == nim] if not df.empty else pd.DataFrame()
 
-                    filename = ""
-                    if bukti:
-                        filename = f"{datetime.now().timestamp()}_{bukti.name}"
-                        with open(os.path.join("uploads", filename), "wb") as f:
-                            f.write(bukti.getbuffer())
-
-                    new_data = {
-                        "nama": nama,
-                        "nim": nim,
-                        "mata_kuliah": matkul,
-                        "kelas": kelas,
-                        "pertemuan_ke": pertemuan,
-                        "tanggal_pertemuan": str(tanggal_pertemuan),
-                        "tanggal_laporan": datetime.now().isoformat(),
-                        "jenis_kendala": jenis,
-                        "deskripsi": deskripsi,
-                        "bukti": filename,
-                        "status": "Menunggu"
-                    }
-
-                    try:
-                        res = supabase.table("laporan").insert(new_data).execute()
-
-                        if hasattr(res, "error") and res.error:
-                            st.error(f"Gagal insert: {res.error}")
-                        else:
-                            kirim_email(nama, nim, matkul)
-                            st.success("Laporan terkirim!")
-                            st.rerun()
-
-                    except Exception as e:
-                        st.error(f"Insert Error: {e}")
+    if df_user.empty:
+        st.info("Belum ada laporan")
+    else:
+        st.dataframe(df_user[["mata_kuliah","kelas","pertemuan_ke","status"]])
 
 # ================= ADMIN =================
 elif role == "admin":
-    st.title("🎓 Dashboard Akademik")
+    df = load_data()
+
+    st.title("📊 Dashboard")
 
     if df.empty:
         st.warning("Belum ada data")
     else:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total", len(df))
-        col2.metric("Disetujui", len(df[df["status"] == "Disetujui"]))
-        col3.metric("Ditolak", len(df[df["status"] == "Ditolak"]))
-
-        st.subheader("📊 Tren Bulanan")
-        df["bulan"] = df["tanggal_pertemuan"].dt.to_period("M").astype(str)
-        st.line_chart(df.groupby("bulan").size())
-
-        st.subheader("🏫 Kelas Bermasalah")
-        st.bar_chart(df["kelas"].value_counts())
-
-        st.subheader("⚠️ Jenis Kendala")
-        st.bar_chart(df["jenis_kendala"].value_counts())
-
         for _, row in df.iterrows():
             st.markdown("---")
             st.write(f"{row['nama']} ({row['nim']})")
-            st.write(f"{row['mata_kuliah']} | {row['kelas']}")
-            st.write(f"Pertemuan {row['pertemuan_ke']}")
+            st.write(row["mata_kuliah"], row["kelas"])
+
+            if row["bukti"]:
+                st.link_button("Lihat Bukti", row["bukti"])
+
+            # status visual
+            if row["status"] == "Menunggu":
+                st.warning("Menunggu")
+            elif row["status"] == "Disetujui":
+                st.success("Disetujui")
+            else:
+                st.error("Ditolak")
 
             if st.button("Approve", key=f"a{row['id']}"):
-                try:
-                    supabase.table("laporan") \
-                        .update({"status": "Disetujui"}) \
-                        .eq("id", row["id"]) \
-                        .execute()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Update Error: {e}")
+                supabase.table("laporan").update({"status": "Disetujui"}).eq("id", row["id"]).execute()
+                st.rerun()
 
             if st.button("Reject", key=f"r{row['id']}"):
-                try:
-                    supabase.table("laporan") \
-                        .update({"status": "Ditolak"}) \
-                        .eq("id", row["id"]) \
-                        .execute()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Update Error: {e}")
+                supabase.table("laporan").update({"status": "Ditolak"}).eq("id", row["id"]).execute()
+                st.rerun()
