@@ -13,8 +13,8 @@ st.set_page_config(page_title="Sistem Presensi", layout="wide")
 os.makedirs("uploads", exist_ok=True)
 
 # ================= SUPABASE =================
-SUPABASE_URL = os.getenv("https://fftmsmfjtxhcoeshdcaw.supabase.co")
-SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmdG1zbWZqdHhoY29lc2hkY2F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNDYwNjQsImV4cCI6MjA5MTcyMjA2NH0.zYWO75eY6X35LjUz0jTnepX29oo9eDiJSmiKRazKF-c")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
