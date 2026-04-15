@@ -3,8 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime
 from supabase import create_client
-import smtplib
-from email.message import EmailMessage
+import requests
 
 # ================= INIT =================
 st.set_page_config(page_title="Sistem Presensi", layout="wide")
@@ -14,43 +13,39 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ================= EMAIL =================
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_ADMIN = os.getenv("EMAIL_ADMIN")
+# ================= WA FONNTE =================
+FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
 
-def kirim_email(nama, nim, matkul):
+def kirim_wa_auto(nomor, pesan):
     try:
-        msg = EmailMessage()
-        msg['Subject'] = '📩 Laporan Presensi Baru'
-        msg['From'] = EMAIL_SENDER
-        msg['To'] = EMAIL_ADMIN
+        nomor = str(nomor).strip()
 
-        msg.set_content(f"""
-Laporan baru masuk:
+        # ubah 08 → 628
+        if nomor.startswith("0"):
+            nomor = "62" + nomor[1:]
 
-Nama: {nama}
-NIM: {nim}
-Matkul: {matkul}
-""")
+        url = "https://api.fonnte.com/send"
+        headers = {
+            "Authorization": FONNTE_TOKEN
+        }
+        data = {
+            "target": nomor,
+            "message": pesan
+        }
 
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_SENDER, EMAIL_PASS)
-            smtp.send_message(msg)
+        requests.post(url, headers=headers, data=data)
+
     except Exception as e:
-        st.warning(f"Email gagal: {e}")
+        st.warning(f"Gagal kirim WA: {e}")
 
 # ================= LOAD MAHASISWA =================
 df_mhs = pd.read_excel("data/mahasiswa.xlsx")
-df_mhs.columns = ["kode_mk", "mata_kuliah", "kelas", "nim", "nama"]
+df_mhs.columns = ["kode_mk", "mata_kuliah", "kelas", "nim", "nama", "no_hp"]
 
 # ================= LOAD DATA =================
 def load_data():
-    try:
-        res = supabase.table("laporan").select("*").execute()
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
-    except:
-        return pd.DataFrame()
+    res = supabase.table("laporan").select("*").execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
 # ================= SESSION =================
 if "logged_in" not in st.session_state:
@@ -58,7 +53,7 @@ if "logged_in" not in st.session_state:
 
 # ================= LOGIN =================
 if not st.session_state.logged_in:
-    st.title("🔐 Login Sistem Presensi")
+    st.title("Login")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -92,68 +87,62 @@ role = st.session_state.role
 if role == "mahasiswa":
     df = load_data()
 
-    st.title("📩 Lapor Kendala")
-
     nim = st.session_state.username
     data_mhs = df_mhs[df_mhs["nim"].astype(str) == str(nim)]
+
     nama = data_mhs.iloc[0]["nama"]
+    no_hp = data_mhs.iloc[0]["no_hp"]
+
+    st.title("Lapor Kendala")
 
     with st.form("form"):
         matkul = st.selectbox("Mata Kuliah", data_mhs["mata_kuliah"].unique())
         kelas = st.selectbox("Kelas", data_mhs["kelas"].unique())
-        pertemuan = st.number_input("Pertemuan Ke-", 1, 16)
+        pertemuan = st.number_input("Pertemuan", 1, 16)
         tanggal = st.date_input("Tanggal")
 
-        jenis = st.selectbox("Jenis Kendala", ["Gagal Scan","Sistem Error","Lupa Presensi","Lainnya"])
+        jenis = st.selectbox("Jenis", ["Gagal Scan","Error","Lupa","Lainnya"])
         deskripsi = st.text_area("Deskripsi")
-        bukti = st.file_uploader("Upload Bukti")
 
         submit = st.form_submit_button("Kirim")
 
         if submit:
-            if deskripsi.strip() == "":
-                st.warning("Isi deskripsi")
-            else:
-                # upload ke storage
-                file_url = ""
-                if bukti:
-                    filename = f"{datetime.now().timestamp()}_{bukti.name}"
-                    supabase.storage.from_("bukti").upload(filename, bukti.getvalue())
-                    file_url = f"{SUPABASE_URL}/storage/v1/object/public/bukti/{filename}"
+            data = {
+                "nama": nama,
+                "nim": nim,
+                "mata_kuliah": matkul,
+                "kelas": kelas,
+                "pertemuan_ke": pertemuan,
+                "tanggal_pertemuan": str(tanggal),
+                "tanggal_laporan": datetime.now().isoformat(),
+                "jenis_kendala": jenis,
+                "deskripsi": deskripsi,
+                "status": "Menunggu"
+            }
 
-                data = {
-                    "nama": nama,
-                    "nim": nim,
-                    "mata_kuliah": matkul,
-                    "kelas": kelas,
-                    "pertemuan_ke": pertemuan,
-                    "tanggal_pertemuan": str(tanggal),
-                    "tanggal_laporan": datetime.now().isoformat(),
-                    "jenis_kendala": jenis,
-                    "deskripsi": deskripsi,
-                    "bukti": file_url,
-                    "status": "Menunggu"
-                }
+            supabase.table("laporan").insert(data).execute()
 
-                supabase.table("laporan").insert(data).execute()
-                kirim_email(nama, nim, matkul)
-                st.success("Terkirim!")
-                st.rerun()
+            # WA NOTIF SUBMIT
+            pesan = f"""
+Halo {nama},
 
-    # RIWAYAT
-    st.subheader("📋 Riwayat")
-    df_user = df[df["nim"] == nim] if not df.empty else pd.DataFrame()
+Laporan presensi berhasil dikirim.
 
-    if df_user.empty:
-        st.info("Belum ada laporan")
-    else:
-        st.dataframe(df_user[["mata_kuliah","kelas","pertemuan_ke","status"]])
+Matkul: {matkul}
+Status: Menunggu
+
+Terima kasih.
+"""
+            kirim_wa_auto(no_hp, pesan)
+
+            st.success("Terkirim")
+            st.rerun()
 
 # ================= ADMIN =================
 elif role == "admin":
     df = load_data()
 
-    st.title("📊 Dashboard")
+    st.title("Dashboard")
 
     if df.empty:
         st.warning("Belum ada data")
@@ -163,10 +152,11 @@ elif role == "admin":
             st.write(f"{row['nama']} ({row['nim']})")
             st.write(row["mata_kuliah"], row["kelas"])
 
-            if row["bukti"]:
-                st.link_button("Lihat Bukti", row["bukti"])
+            # ambil nomor dari excel
+            mhs = df_mhs[df_mhs["nim"].astype(str) == str(row["nim"])]
+            no_hp = mhs.iloc[0]["no_hp"] if not mhs.empty else ""
 
-            # status visual
+            # status
             if row["status"] == "Menunggu":
                 st.warning("Menunggu")
             elif row["status"] == "Disetujui":
@@ -174,10 +164,36 @@ elif role == "admin":
             else:
                 st.error("Ditolak")
 
+            # APPROVE
             if st.button("Approve", key=f"a{row['id']}"):
-                supabase.table("laporan").update({"status": "Disetujui"}).eq("id", row["id"]).execute()
+                supabase.table("laporan").update({
+                    "status": "Disetujui"
+                }).eq("id", row["id"]).execute()
+
+                pesan = f"""
+Halo {row['nama']},
+
+Laporan Anda DISETUJUI.
+
+Matkul: {row['mata_kuliah']}
+"""
+                kirim_wa_auto(no_hp, pesan)
+
                 st.rerun()
 
+            # REJECT
             if st.button("Reject", key=f"r{row['id']}"):
-                supabase.table("laporan").update({"status": "Ditolak"}).eq("id", row["id"]).execute()
+                supabase.table("laporan").update({
+                    "status": "Ditolak"
+                }).eq("id", row["id"]).execute()
+
+                pesan = f"""
+Halo {row['nama']},
+
+Laporan Anda DITOLAK.
+
+Matkul: {row['mata_kuliah']}
+"""
+                kirim_wa_auto(no_hp, pesan)
+
                 st.rerun()
