@@ -13,27 +13,36 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ================= WA FONNTE =================
+# ================= FONNTE =================
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
 
+# ================= FORMAT NOMOR =================
+def format_nomor(nomor):
+    nomor = str(nomor)
+    nomor = nomor.replace(" ", "").replace("-", "").replace("+", "")
+
+    if nomor.startswith("08"):
+        nomor = "62" + nomor[1:]
+    elif nomor.startswith("628"):
+        pass
+    else:
+        nomor = "62" + nomor
+
+    return nomor
+
+# ================= KIRIM WA =================
 def kirim_wa_auto(nomor, pesan):
     try:
-        nomor = str(nomor).strip()
-
-        # ubah 08 → 628
-        if nomor.startswith("0"):
-            nomor = "62" + nomor[1:]
+        nomor = format_nomor(nomor)
 
         url = "https://api.fonnte.com/send"
-        headers = {
-            "Authorization": FONNTE_TOKEN
-        }
-        data = {
-            "target": nomor,
-            "message": pesan
-        }
+        headers = {"Authorization": FONNTE_TOKEN}
+        data = {"target": nomor, "message": pesan}
 
-        requests.post(url, headers=headers, data=data)
+        res = requests.post(url, headers=headers, data=data)
+
+        if res.status_code != 200:
+            st.warning(f"WA gagal: {res.text}")
 
     except Exception as e:
         st.warning(f"Gagal kirim WA: {e}")
@@ -53,7 +62,7 @@ if "logged_in" not in st.session_state:
 
 # ================= LOGIN =================
 if not st.session_state.logged_in:
-    st.title("Login")
+    st.title("🔐 Login Sistem")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -93,15 +102,15 @@ if role == "mahasiswa":
     nama = data_mhs.iloc[0]["nama"]
     no_hp = data_mhs.iloc[0]["no_hp"]
 
-    st.title("Lapor Kendala")
+    st.title("📩 Lapor Kendala Presensi")
 
     with st.form("form"):
         matkul = st.selectbox("Mata Kuliah", data_mhs["mata_kuliah"].unique())
         kelas = st.selectbox("Kelas", data_mhs["kelas"].unique())
-        pertemuan = st.number_input("Pertemuan", 1, 16)
+        pertemuan = st.number_input("Pertemuan Ke", 1, 16)
         tanggal = st.date_input("Tanggal")
 
-        jenis = st.selectbox("Jenis", ["Gagal Scan","Error","Lupa","Lainnya"])
+        jenis = st.selectbox("Jenis Kendala", ["Gagal Scan","Error Sistem","Lupa Presensi","Lainnya"])
         deskripsi = st.text_area("Deskripsi")
 
         submit = st.form_submit_button("Kirim")
@@ -122,7 +131,6 @@ if role == "mahasiswa":
 
             supabase.table("laporan").insert(data).execute()
 
-            # WA NOTIF SUBMIT
             pesan = f"""
 Halo {nama},
 
@@ -135,65 +143,126 @@ Terima kasih.
 """
             kirim_wa_auto(no_hp, pesan)
 
-            st.success("Terkirim")
+            st.success("Laporan terkirim")
             st.rerun()
+
+    # ================= RIWAYAT =================
+    st.subheader("📋 Riwayat Laporan")
+
+    df_user = df[df["nim"] == nim] if not df.empty else pd.DataFrame()
+
+    if df_user.empty:
+        st.info("Belum ada laporan")
+    else:
+        st.dataframe(df_user[["mata_kuliah","kelas","pertemuan_ke","status"]])
 
 # ================= ADMIN =================
 elif role == "admin":
     df = load_data()
 
-    st.title("Dashboard")
+    st.title("📊 Dashboard Admin")
 
     if df.empty:
         st.warning("Belum ada data")
+        st.stop()
+
+    # ================= FILTER =================
+    st.subheader("🔍 Filter")
+
+    status_filter = st.selectbox("Status", ["Semua","Menunggu","Disetujui","Ditolak"])
+    matkul_filter = st.selectbox("Mata Kuliah", ["Semua"] + list(df["mata_kuliah"].unique()))
+    search_nim = st.text_input("Cari NIM")
+
+    df_filtered = df.copy()
+
+    if status_filter != "Semua":
+        df_filtered = df_filtered[df_filtered["status"] == status_filter]
+
+    if matkul_filter != "Semua":
+        df_filtered = df_filtered[df_filtered["mata_kuliah"] == matkul_filter]
+
+    if search_nim:
+        df_filtered = df_filtered[df_filtered["nim"].astype(str).str.contains(search_nim)]
+
+    # ================= DASHBOARD GRAFIK =================
+    st.subheader("📊 Dashboard Grafik")
+
+    if not df_filtered.empty:
+
+        st.markdown("### 📌 Distribusi Status")
+        st.bar_chart(df_filtered["status"].value_counts())
+
+        st.markdown("### 🎓 Mata Kuliah Terbanyak")
+        st.bar_chart(df_filtered["mata_kuliah"].value_counts().head(10))
+
+        st.markdown("### ⚠️ Jenis Kendala")
+        st.bar_chart(df_filtered["jenis_kendala"].value_counts())
+
+        st.markdown("### 📈 Tren Laporan")
+
+        df_filtered["tanggal_pertemuan"] = pd.to_datetime(
+            df_filtered["tanggal_pertemuan"], errors="coerce"
+        )
+
+        df_filtered["bulan"] = df_filtered["tanggal_pertemuan"].dt.to_period("M").astype(str)
+
+        tren = df_filtered.groupby("bulan").size()
+        st.line_chart(tren)
+
     else:
-        for _, row in df.iterrows():
-            st.markdown("---")
-            st.write(f"{row['nama']} ({row['nim']})")
-            st.write(row["mata_kuliah"], row["kelas"])
+        st.info("Tidak ada data")
 
-            # ambil nomor dari excel
-            mhs = df_mhs[df_mhs["nim"].astype(str) == str(row["nim"])]
-            no_hp = mhs.iloc[0]["no_hp"] if not mhs.empty else ""
+    # ================= EXPORT =================
+    st.subheader("📥 Export Excel")
 
-            # status
-            if row["status"] == "Menunggu":
-                st.warning("Menunggu")
-            elif row["status"] == "Disetujui":
-                st.success("Disetujui")
-            else:
-                st.error("Ditolak")
+    df_filtered.to_excel("laporan.xlsx", index=False)
+    with open("laporan.xlsx", "rb") as f:
+        st.download_button("Download Excel", f, file_name="laporan.xlsx")
 
-            # APPROVE
-            if st.button("Approve", key=f"a{row['id']}"):
-                supabase.table("laporan").update({
-                    "status": "Disetujui"
-                }).eq("id", row["id"]).execute()
+    # ================= DATA =================
+    for _, row in df_filtered.iterrows():
+        st.markdown("---")
+        st.write(f"{row['nama']} ({row['nim']})")
+        st.write(row["mata_kuliah"], row["kelas"])
 
-                pesan = f"""
+        mhs = df_mhs[df_mhs["nim"].astype(str) == str(row["nim"])]
+        no_hp = mhs.iloc[0]["no_hp"] if not mhs.empty else ""
+
+        if row["status"] == "Menunggu":
+            st.warning("Menunggu")
+        elif row["status"] == "Disetujui":
+            st.success("Disetujui")
+        else:
+            st.error("Ditolak")
+
+        if st.button("Approve", key=f"a{row['id']}"):
+            supabase.table("laporan").update({
+                "status": "Disetujui"
+            }).eq("id", row["id"]).execute()
+
+            pesan = f"""
 Halo {row['nama']},
 
-Laporan Anda DISETUJUI.
+Laporan Anda DISETUJUI ✅
 
 Matkul: {row['mata_kuliah']}
 """
-                kirim_wa_auto(no_hp, pesan)
+            kirim_wa_auto(no_hp, pesan)
 
-                st.rerun()
+            st.rerun()
 
-            # REJECT
-            if st.button("Reject", key=f"r{row['id']}"):
-                supabase.table("laporan").update({
-                    "status": "Ditolak"
-                }).eq("id", row["id"]).execute()
+        if st.button("Reject", key=f"r{row['id']}"):
+            supabase.table("laporan").update({
+                "status": "Ditolak"
+            }).eq("id", row["id"]).execute()
 
-                pesan = f"""
+            pesan = f"""
 Halo {row['nama']},
 
-Laporan Anda DITOLAK.
+Laporan Anda DITOLAK ❌
 
 Matkul: {row['mata_kuliah']}
 """
-                kirim_wa_auto(no_hp, pesan)
+            kirim_wa_auto(no_hp, pesan)
 
-                st.rerun()
+            st.rerun()
