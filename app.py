@@ -160,14 +160,26 @@ Terima kasih.
 elif role == "admin":
     df = load_data()
 
-    st.title("📊 Dashboard Admin")
+    st.title("📊 Dashboard Akademik")
 
     if df.empty:
         st.warning("Belum ada data")
         st.stop()
 
+    # ================= KPI =================
+    total = len(df)
+    disetujui = len(df[df["status"] == "Disetujui"])
+    ditolak = len(df[df["status"] == "Ditolak"])
+    menunggu = len(df[df["status"] == "Menunggu"])
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total", total)
+    col2.metric("Disetujui", disetujui)
+    col3.metric("Ditolak", ditolak)
+    col4.metric("Menunggu", menunggu)
+
     # ================= FILTER =================
-    st.subheader("🔍 Filter")
+    st.markdown("## 🔍 Filter")
 
     status_filter = st.selectbox("Status", ["Semua","Menunggu","Disetujui","Ditolak"])
     matkul_filter = st.selectbox("Mata Kuliah", ["Semua"] + list(df["mata_kuliah"].unique()))
@@ -184,19 +196,20 @@ elif role == "admin":
     if search_nim:
         df_filtered = df_filtered[df_filtered["nim"].astype(str).str.contains(search_nim)]
 
-    # ================= DASHBOARD GRAFIK =================
-    st.subheader("📊 Dashboard Grafik")
+    # ================= GRAFIK =================
+    st.markdown("## 📊 Analisis Data")
 
     if not df_filtered.empty:
 
-        st.markdown("### 📌 Distribusi Status")
-        st.bar_chart(df_filtered["status"].value_counts())
+        colA, colB = st.columns(2)
 
-        st.markdown("### 🎓 Mata Kuliah Terbanyak")
-        st.bar_chart(df_filtered["mata_kuliah"].value_counts().head(10))
+        with colA:
+            st.markdown("### Status")
+            st.bar_chart(df_filtered["status"].value_counts())
 
-        st.markdown("### ⚠️ Jenis Kendala")
-        st.bar_chart(df_filtered["jenis_kendala"].value_counts())
+        with colB:
+            st.markdown("### Jenis Kendala")
+            st.bar_chart(df_filtered["jenis_kendala"].value_counts())
 
         st.markdown("### 📈 Tren Laporan")
 
@@ -209,21 +222,21 @@ elif role == "admin":
         tren = df_filtered.groupby("bulan").size()
         st.line_chart(tren)
 
-    else:
-        st.info("Tidak ada data")
-
     # ================= EXPORT =================
-    st.subheader("📥 Export Excel")
+    st.markdown("## 📥 Export")
 
     df_filtered.to_excel("laporan.xlsx", index=False)
     with open("laporan.xlsx", "rb") as f:
         st.download_button("Download Excel", f, file_name="laporan.xlsx")
 
     # ================= DATA =================
+    st.markdown("## 📋 Data Laporan")
+
     for _, row in df_filtered.iterrows():
         st.markdown("---")
-        st.write(f"{row['nama']} ({row['nim']})")
-        st.write(row["mata_kuliah"], row["kelas"])
+        st.write(f"### {row['nama']} ({row['nim']})")
+        st.write(f"{row['mata_kuliah']} | {row['kelas']}")
+        st.write(f"Pertemuan {row['pertemuan_ke']}")
 
         mhs = df_mhs[df_mhs["nim"].astype(str) == str(row["nim"])]
         no_hp = mhs.iloc[0]["no_hp"] if not mhs.empty else ""
@@ -235,34 +248,22 @@ elif role == "admin":
         else:
             st.error("Ditolak")
 
-        if st.button("Approve", key=f"a{row['id']}"):
-            supabase.table("laporan").update({
-                "status": "Disetujui"
-            }).eq("id", row["id"]).execute()
+        col1, col2 = st.columns(2)
 
-            pesan = f"""
-Halo {row['nama']},
+        with col1:
+            if st.button("✅ Approve", key=f"a{row['id']}"):
+                supabase.table("laporan").update({
+                    "status": "Disetujui"
+                }).eq("id", row["id"]).execute()
 
-Laporan Anda DISETUJUI ✅
+                kirim_wa_auto(no_hp, f"Halo {row['nama']}, laporan Anda DISETUJUI.")
+                st.rerun()
 
-Matkul: {row['mata_kuliah']}
-"""
-            kirim_wa_auto(no_hp, pesan)
+        with col2:
+            if st.button("❌ Reject", key=f"r{row['id']}"):
+                supabase.table("laporan").update({
+                    "status": "Ditolak"
+                }).eq("id", row["id"]).execute()
 
-            st.rerun()
-
-        if st.button("Reject", key=f"r{row['id']}"):
-            supabase.table("laporan").update({
-                "status": "Ditolak"
-            }).eq("id", row["id"]).execute()
-
-            pesan = f"""
-Halo {row['nama']},
-
-Laporan Anda DITOLAK ❌
-
-Matkul: {row['mata_kuliah']}
-"""
-            kirim_wa_auto(no_hp, pesan)
-
-            st.rerun()
+                kirim_wa_auto(no_hp, f"Halo {row['nama']}, laporan Anda DITOLAK.")
+                st.rerun()
